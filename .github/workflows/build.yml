@@ -1,0 +1,134 @@
+name: Build PWA to Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: "Nom de l'application"
+        required: false
+        default: "MonApp"
+      package_id:
+        description: "Package Android (ex: com.nps.monapp)"
+        required: false
+        default: "com.nps.pwa.studio"
+      pwa_url:
+        description: "URL de la PWA HTTPS"
+        required: false
+        default: ""
+      theme_color:
+        description: "Couleur thème (#rrggbb)"
+        required: false
+        default: "#7c6eff"
+      version_name:
+        description: "Version (ex: 1.0.0)"
+        required: false
+        default: "1.0.0"
+      min_sdk:
+        description: "SDK Android minimum"
+        required: false
+        default: "23"
+      permissions:
+        description: "Permissions séparées par virgule"
+        required: false
+        default: ""
+      build_id:
+        description: "ID unique du build"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Récupération du code source
+        uses: actions/checkout@v4
+
+      - name: 2. Configuration de Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: gradle
+
+      - name: 3. Configuration de l'Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 4. Installer composants SDK
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-33" "build-tools;33.0.2" "platform-tools"
+
+      - name: 5. Appliquer paramètres du build
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name || 'PWA-APK Studio' }}"
+          PKG="${{ github.event.inputs.package_id || 'com.nps.pwa.studio' }}"
+          VER="${{ github.event.inputs.version_name || '1.0.0' }}"
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+          echo "PKG=$PKG" >> $GITHUB_ENV
+          echo "VER=$VER" >> $GITHUB_ENV
+          # Mettre à jour le nom de l'app dans strings.xml
+          sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">$APP_NAME</string>|" app/src/main/res/values/strings.xml || true
+          # Mettre à jour le namespace et applicationId
+          sed -i "s|namespace 'com.nps.pwa.studio'|namespace '$PKG'|g" app/build.gradle || true
+          sed -i "s|applicationId \"com.nps.pwa.studio\"|applicationId \"$PKG\"|g" app/build.gradle || true
+          sed -i "s|versionName \"1.0\"|versionName \"$VER\"|g" app/build.gradle || true
+          
+          # Créer icônes launcher par défaut si absentes
+          IC_B64="iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAAQUlEQVR4nO3OQQ0AIAwAsSlGAd7BBcejSQV09jpfmXwgJCQkVA+EhISE6oGQkJBQPRASEhKqB0JCQkL1QEhI6LELSiUyAEjd5vMAAAAASUVORK5CYII="
+          for DIR in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            mkdir -p "app/src/main/res/$DIR"
+            if [ ! -f "app/src/main/res/$DIR/ic_launcher.png" ]; then
+              printf "%s" "$IC_B64" | base64 -d > "app/src/main/res/$DIR/ic_launcher.png"
+            fi
+          done
+          # Forcer AndroidX et Jetifier (sans espaces, obligatoire)
+          sed -i "/android.useAndroidX/d" gradle.properties 2>/dev/null || true
+          sed -i "/android.enableJetifier/d" gradle.properties 2>/dev/null || true
+          echo "android.useAndroidX=true" >> gradle.properties
+          echo "android.enableJetifier=true" >> gradle.properties
+          echo "✅ Paramètres appliqués"
+
+      - name: 6. Télécharger Gradle Wrapper JAR
+        run: |
+          mkdir -p gradle/wrapper
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused --retry-all-errors \
+            -o gradle/wrapper/gradle-wrapper.jar \
+            https://github.com/gradle/gradle/raw/v8.2.0/gradle/wrapper/gradle-wrapper.jar \
+          || curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused --retry-all-errors \
+            -o gradle/wrapper/gradle-wrapper.jar \
+            https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar
+
+      - name: 7. Rendre gradlew exécutable
+        run: chmod +x gradlew
+
+      - name: 8. Compilation APK Debug
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: 9. Publication APK (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.event.inputs.build_id || 'latest' }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: 10. Publication APK (Release - telechargement direct)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" app/build/outputs/apk/debug/*.apk \
+            --repo "${{ github.repository }}" \
+            --title "Build #${{ github.run_number }} - ${{ github.event.inputs.app_name || 'PWA-APK Studio' }}" \
+            --notes "Version ${{ github.event.inputs.version_name || '1.0.0' }} - Package ${{ github.event.inputs.package_id || 'com.nps.pwa.studio' }}" \
+            || echo "Release non creee (verifie les permissions du token)"
+
+      - name: 11. Infos du build
+        run: |
+          echo "=== Build terminé avec succès ==="
+          echo "App: ${{ github.event.inputs.app_name || 'PWA-APK Studio' }}"
+          echo "Package: ${{ github.event.inputs.package_id || 'com.nps.pwa.studio' }}"
+          echo "Version: ${{ github.event.inputs.version_name || '1.0.0' }}"
+          ls -lh app/build/outputs/apk/debug/*.apk 2>/dev/null || echo "APK non trouvé"
