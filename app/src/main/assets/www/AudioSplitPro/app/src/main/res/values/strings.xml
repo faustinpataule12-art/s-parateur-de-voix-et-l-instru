@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">AudioSplitPro</string>
+    <string name="select_audio">Choisir un fichier audio</string>
+    <string name="separate">Séparer les pistes</string>
+    <string name="vocal_track">🎤 Voix</string>
+    <string name="instrumental_track">🎸 Instrumental</string>
+    <string name="play">Écouter</string>
+    <string name="pause">Pause</string>
+    <string name="download">Télécharger</string>
+    <string name="processing">Séparation en cours…</string>
+</resources>
